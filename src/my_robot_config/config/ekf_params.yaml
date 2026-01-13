@@ -1,0 +1,40 @@
+ekf_filter_node:
+  ros__parameters:
+    frequency: 30.0
+    two_d_mode: true
+    publish_tf: true
+    
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+    world_frame: odom
+
+    # --------------------------------------
+    # INPUT 1: WHEEL ODOMETRY (Chỉ lấy Vị trí & Vận tốc Tuyến tính)
+    # --------------------------------------
+    odom0: /wheel/odom
+    odom0_config: [
+      true,  true,  false,   # X, Y (Lấy vị trí), Z
+      false, false, false,   # Roll, Pitch, Yaw ( TẮT YAW đi, bánh xe đo góc tệ lắm)
+      true,  true,  false,   # Vx, Vy (✔ BẬT Vy vì là Mecanum), Vz
+      false, false, false,   # Vroll, Vpitch, Vyaw (Tắt Vyaw để nhường cho IMU)
+      false, false, false    # Ax, Ay, Az
+    ]
+    odom0_differential: false
+    odom0_relative: false
+
+    # --------------------------------------
+    # INPUT 2: IMU (Chuyên trị Góc xoay)
+    # --------------------------------------
+    imu0: /imu/data
+    imu0_config: [
+      false, false, false,   # X, Y, Z
+      false, false, true,    # Roll, Pitch, Yaw (✔ Lấy góc chuẩn từ IMU)
+      false, false, false,   # Vx, Vy, Vz
+      false, false, true,    # Vroll, Vpitch, Vyaw (✔ Lấy tốc độ xoay từ Gyro)
+      false, false, false    # Ax, Ay, Az
+    ]
+    
+    imu0_differential: false 
+    imu0_relative: true      # Nên để true để lúc khởi động góc robot về 0
+    imu0_remove_gravitational_acceleration: true

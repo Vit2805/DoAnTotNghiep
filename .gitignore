@@ -1,0 +1,19 @@
+# ROS2 build artifacts
+build/
+install/
+log/
+.colcon/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# C++ binaries & temporary files
+*.o
+*.so
+*.a
+
+# Editor specific
+.vscode/
+.idea/
+*~

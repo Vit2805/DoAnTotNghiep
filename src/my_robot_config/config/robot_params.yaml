@@ -1,0 +1,8 @@
+/**:
+  ros__parameters:
+    wheel_radius: 0.07
+    track_width_x: 0.48
+    track_width_y: 0.48
+    wheel_base: 0.35
+    ticks_per_rev: 6864.0
+    max_velocity: 1.0
