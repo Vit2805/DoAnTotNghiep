@@ -1,0 +1,8 @@
+# Sửa đường dẫn ảnh thành đường dẫn tuyệt đối (Full path)
+image: /home/tung/ros2_ws/src/mecanum_bringup/maps/my_map.pgm
+mode: trinary
+resolution: 0.05
+origin: [-7.52, -28.7, 0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.25

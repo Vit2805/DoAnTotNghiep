@@ -1,0 +1,148 @@
+/**:
+  ros__parameters:
+
+
+
+
+    robot:
+      geometry:
+        R: 0.075
+        lx: 0.240
+        ly: 0.235
+        wheel_width: 0.062
+        base_thk: 0.20
+        base_z: 0.02
+      wheels:
+
+        joint_names: ['wheel_fl_joint','wheel_fr_joint','wheel_rr_joint','wheel_rl_joint']
+        invert: [true, true, true, true]
+        ticks_per_rev: 6864.0
+      drivetrain:
+        wheel_max_rpm: 30.3
+        limit_scale_safety: 1.0
+
+      sensors:
+        lidar_front: {x: 0.42, y: 0.29, z: 0.05, yaw: 3.141592653589793}
+        lidar_rear: {x: -0.42, y: -0.29, z: 0.05, yaw: 0.0}
+
+
+
+
+    comms:
+      bridge:
+        serial_port: /dev/ttyACM0
+        baud: 115200
+        rate_hz: 50
+        cmd_timeout_ms: 500
+      imu:
+        serial_port: /dev/ttyUSB0
+        baud: 57600
+
+
+
+
+    frames:
+      odom: odom
+      base_link: base_link
+      imu_frame: imu_link
+
+
+
+
+    bridge_limits:
+      max_vx: null
+      max_vy: null
+      max_wz: null
+
+
+
+
+    imu:
+      yaw_offset_deg: 0.0
+      orientation_stddev: 0.05
+      accel_stddev: 0.3
+      poll_hz: 200
+      pub_hz: 200
+
+
+
+
+    teleop:
+      rate_hz: 25
+      init_scale: 0.5
+      step_scale: 0.1
+      inc_lin_frac: 0.10
+      inc_ang_frac: 0.10
+
+
+
+
+    odom:
+      rate_hz: 50
+      use_imu_yaw: true
+      imu_topic: imu/data
+      publish_tf: true
+
+
+
+
+
+
+
+
+sllidar_front:
+  ros__parameters:
+    serial_port: /dev/ttyUSB1
+    serial_baudrate: 115200
+    frame_id: lidar_front
+    inverted: false
+    angle_compensate: true
+
+
+sllidar_rear:
+  ros__parameters:
+    serial_port: /dev/ttyUSB2
+    serial_baudrate: 115200
+    frame_id: lidar_rear
+    inverted: false
+    angle_compensate: true
+
+
+
+
+scan_merger_360:
+  ros__parameters:
+    front_topic: /scan_front
+    rear_topic: /scan_rear
+    target_frame: base_link
+    output_topic: /scan_360
+    publish_rate_hz: 10.0
+    angle_increment: 0.01745329252
+    range_min: 0.05
+    range_max: 12.0
+    use_inf: true
+
+    front_mask_box: [0.0, 0.90, -0.1, 0.60]
+    rear_mask_box:  [0.0, 0.90, -0.1, 0.60]
+
+    body_polygon: [-0.38, -0.265, 0.38, -0.265, 0.38, 0.265, -0.38, 0.265]
+
+
+
+
+
+controller_switcher:
+  ros__parameters:
+    scan_topic: /scan_360
+    controller_server: /controller_server
+    pid_controller_id: PID_RPP
+    rpp_controller_id: PID_RPP
+    dwb_controller_id: PID_DWB
+    enable_rpp: true
+    enable_dwb: true
+    rpp_threshold_m: 1.8
+    dwb_threshold_m: 1.0
+    min_valid_range: 0.05
+    max_valid_range: 12.0
+    switch_cooldown_s: 2.0
+    check_rate_hz: 5.0
