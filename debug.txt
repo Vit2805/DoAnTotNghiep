@@ -1,0 +1,911 @@
+TIME: Fri Jan 16 03:55:08 PM +07 2026
+================= 1. CAU TRUC DU AN =================
+src
+├── mecanum_base
+│   ├── mecanum_base
+│   │   ├── dual_lidar_merger.py
+│   │   ├── __init__.py
+│   │   ├── mecanum_teleop.py
+│   │   │   ├── dual_lidar_merger.cpython-310.pyc
+│   │   │   ├── __init__.cpython-310.pyc
+│   │   │   ├── robot_driver.cpython-310.pyc
+│   │   │   ├── wheel_rotation_tf.cpython-310.pyc
+│   │   │   └── wheel_tf_node.cpython-310.pyc
+│   │   ├── robot_driver.py
+│   │   └── wheel_rotation_tf.py
+│   ├── package.xml
+│   ├── resource
+│   │   └── mecanum_base
+│   ├── setup.cfg
+│   ├── setup.py
+│   └── test
+│       ├── test_copyright.py
+│       ├── test_flake8.py
+│       └── test_pep257.py
+├── mecanum_bringup
+│   ├── config
+│   │   ├── base
+│   │   │   ├── ekf_params.yaml
+│   │   │   └── robot_params.yaml
+│   │   ├── nav
+│   │   │   └── nav2_params.yaml
+│   │   └── slam
+│   │       └── slam_toolbox_merged.yaml
+│   ├── launch
+│   │   ├── bringup_all.launch.py
+│   │   ├── navigation.launch.py
+│   │   └── slam.launch.py
+│   ├── maps
+│   │   ├── my_map.pgm
+│   │   └── my_map.yaml
+│   ├── mecanum_bringup
+│   │   └── __init__.py
+│   ├── package.xml
+│   ├── resource
+│   │   └── mecanum_bringup
+│   ├── setup.cfg
+│   ├── setup.py
+│   └── test
+│       ├── test_copyright.py
+│       ├── test_flake8.py
+│       └── test_pep257.py
+└── third_party
+    ├── imu_hwt911
+    │   ├── imu_hwt911
+    │   │   ├── hwt911_node.py
+    │   │   ├── __init__.py
+    │   ├── launch
+    │   ├── package.xml
+    │   ├── resource
+    │   │   └── imu_hwt911
+    │   ├── setup.cfg
+    │   ├── setup.py
+    │   └── test
+    │       ├── test_copyright.py
+    │       ├── test_flake8.py
+    │       └── test_pep257.py
+    └── sllidar_ros2
+        ├── CMakeLists.txt
+        ├── launch
+        │   ├── sllidar_a1_launch.py
+        │   ├── sllidar_a2m12_launch .py
+        │   ├── sllidar_a2m7_launch.py
+        │   ├── sllidar_a2m8_launch.py
+        │   ├── sllidar_a3_launch.py
+        │   ├── sllidar_c1_launch.py
+        │   ├── sllidar_s1_launch.py
+        │   ├── sllidar_s1_tcp_launch.py
+        │   ├── sllidar_s2e_launch.py
+        │   ├── sllidar_s2_launch.py
+        │   ├── sllidar_s3_launch.py
+        │   ├── sllidar_t1_launch.py
+        │   ├── view_sllidar_a1_launch.py
+        │   ├── view_sllidar_a2m12_launch.py
+        │   ├── view_sllidar_a2m7_launch.py
+        │   ├── view_sllidar_a2m8_launch.py
+        │   ├── view_sllidar_a3_launch.py
+        │   ├── view_sllidar_c1_launch.py
+        │   ├── view_sllidar_s1_launch.py
+        │   ├── view_sllidar_s1_tcp_launch.py
+        │   ├── view_sllidar_s2e_launch.py
+        │   ├── view_sllidar_s2_launch.py
+        │   ├── view_sllidar_s3_launch.py
+        │   └── view_sllidar_t1_launch.py
+        ├── LICENSE
+        ├── package.xml
+        ├── README.md
+        ├── rplidar_A1.png
+        ├── rplidar_A2.png
+        ├── rviz
+        │   └── sllidar_ros2.rviz
+        ├── scripts
+        │   ├── create_udev_rules.sh
+        │   ├── delete_udev_rules.sh
+        │   └── rplidar.rules
+        ├── sdk
+        │   ├── include
+        │   ├── Makefile
+        │   └── src
+        └── src
+            ├── sllidar_client.cpp
+            └── sllidar_node.cpp
+
+30 directories, 80 files
+
+================= 2. FILE KHOI DONG (BRINGUP) =================
+import os
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, TimerAction
+from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.conditions import IfCondition, UnlessCondition
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    # =========================================================
+    # 1. KHAI BÁO CÁC "CÔNG TẮC" (ARGUMENTS)
+    # =========================================================
+    pkg_bringup = get_package_share_directory('mecanum_bringup')
+    
+    # Argument 1: Có dùng EKF không? (Mặc định: True cho Mecanum)
+    use_ekf_arg = DeclareLaunchArgument(
+        'use_ekf', default_value='true',
+        description='Bật bộ lọc Kalman (True) hay chạy Odom thô (False)?'
+    )
+    
+    # Argument 2: Có bật Lidar không? (Tiện khi chỉ muốn test bánh xe)
+    start_lidar_arg = DeclareLaunchArgument(
+        'start_lidar', default_value='true',
+        description='Bật cảm biến Lidar?'
+    )
+
+    # Lấy giá trị từ Argument ra biến để dùng
+    use_ekf = LaunchConfiguration('use_ekf')
+    start_lidar = LaunchConfiguration('start_lidar')
+    
+    # File cấu hình (Đã trỏ đúng vào thư mục base)
+    robot_config = os.path.join(pkg_bringup, 'config', 'base', 'robot_params.yaml')
+    ekf_config = os.path.join(pkg_bringup, 'config', 'base',  'ekf_params.yaml')
+
+    # =========================================================
+    # 2. STATIC TF (LUÔN BẬT)
+    # =========================================================
+    static_tf_nodes = [
+        Node(package='tf2_ros', executable='static_transform_publisher', name='tf_imu',
+             arguments=['0', '0', '0', '0', '0', '0', 'base_link', 'imu_link']),
+        Node(package='tf2_ros', executable='static_transform_publisher', name='tf_front',
+             arguments=['0.42', '0.29', '0.05', '3.14159', '0', '0', 'base_link', 'lidar_front']),
+        Node(package='tf2_ros', executable='static_transform_publisher', name='tf_rear',
+             arguments=['-0.42', '-0.29', '0.05', '0', '0', '0', 'base_link', 'lidar_rear']),
+    ]
+
+    # =========================================================
+    # 3. LIDAR GROUP (KHỞI ĐỘNG TUẦN TỰ)
+    # =========================================================
+    
+    # 3a. Lidar Trước: Chạy NGAY LẬP TỨC (T=0s)
+    lidar_front_node = Node(
+        package='sllidar_ros2', executable='sllidar_node',
+        name='sllidar_front', output='screen', respawn=True,
+        parameters=[robot_config], remappings=[('scan', 'scan_front')],
+        condition=IfCondition(start_lidar)
+    )
+
+    # 3b. Lidar Sau: Delay 2.0s để tránh sụt nguồn (T=2s)
+    lidar_rear_node = TimerAction(
+        period=5.0, # [QUAN TRỌNG] Delay 2 giây
+        actions=[
+            Node(
+                package='sllidar_ros2', executable='sllidar_node',
+                name='sllidar_rear', output='screen', respawn=True,
+                parameters=[robot_config], remappings=[('scan', 'scan_rear')],
+                condition=IfCondition(start_lidar)
+            )
+        ]
+    )
+
+    # =========================================================
+    # 4. ROBOT DRIVER (LOGIC CHUYỂN ĐỔI EKF THÔNG MINH)
+    # Delay 5s (Tổng cộng) để đợi cả 2 Lidar ổn định
+    # =========================================================
+    
+    # TRƯỜNG HỢP A: KHÔNG DÙNG EKF (use_ekf = False)
+    driver_no_ekf = Node(
+        package='mecanum_base', executable='robot_driver',
+        name='robot_driver_direct', output='screen', respawn=True,
+        parameters=[robot_config, 
+                   {'robot.odom.publish_tf': True}], 
+        condition=UnlessCondition(use_ekf)
+    )
+
+    # TRƯỜNG HỢP B: CÓ DÙNG EKF (use_ekf = True)
+    driver_with_ekf = Node(
+        package='mecanum_base', executable='robot_driver',
+        name='robot_driver_raw', output='screen', respawn=True,
+        parameters=[robot_config, 
+                   {'robot.odom.publish_tf': False}],
+        remappings=[('/odom', '/wheel/odom')],       
+        condition=IfCondition(use_ekf)
+    )
+
+    # IMU luôn cần thiết
+    imu_node = Node(
+        package='imu_hwt911', executable='hwt911_node',
+        name='imu_node', output='screen',
+        parameters=[robot_config], remappings=[('/imu_data', '/imu/data')]
+    )
+
+    # Gom nhóm phần cứng (Chạy sau 5s - Lúc này Lidar đã quay tít)
+    hardware_group = TimerAction(
+        period=5.0,
+        actions=[driver_no_ekf, driver_with_ekf, imu_node]
+    )
+
+    # =========================================================
+    # 5. THUẬT TOÁN (MERGER & EKF) - DELAY 8s
+    # =========================================================
+    
+    ekf_node = Node(
+        package='robot_localization', executable='ekf_node',
+        name='ekf_filter_node', output='screen',
+        parameters=[ekf_config],
+        remappings=[('/odometry/filtered', '/odom')],
+        condition=IfCondition(use_ekf)
+    )
+
+    merger_node = Node(
+        package='mecanum_base', executable='dual_lidar_merger',
+        name='scan_merger_360', output='screen',
+        parameters=[robot_config],
+        condition=IfCondition(start_lidar)
+    )
+    
+    wheel_viz = [
+        Node(package='mecanum_base', executable='wheel_rotation_tf', name='wheel_rot', parameters=[robot_config])
+    ]
+
+    algo_group = TimerAction(
+        period=8.0,
+        actions=[ekf_node, merger_node] + wheel_viz
+    )
+
+    # =========================================================
+    # TRẢ VỀ
+    # =========================================================
+    return LaunchDescription([
+        use_ekf_arg,
+        start_lidar_arg,
+        *static_tf_nodes,
+        lidar_front_node,   # Chạy ngay (0s)
+        lidar_rear_node,    # Chạy trễ (2s)
+        hardware_group,     # Chạy sau (5s)
+        algo_group          # Chạy cuối (8s)
+    ])
+================= 3. FILE CAU HINH NAV2 (PARAMS) =================
+amcl:
+  ros__parameters:
+    use_sim_time: False
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    base_frame_id: "base_link"
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    do_beamskip: false
+    global_frame_id: "map"
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    laser_max_beams: 60
+    laser_model_type: "likelihood_field"
+    max_beams: 60
+    max_particles: 2000
+    min_particles: 500
+    odom_frame_id: "odom"
+    pf_err: 0.05
+    pf_z: 0.99
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 1
+    robot_model_type: "nav2_amcl::OmniMotionModel"
+    save_pose_rate: 0.5
+    sigma_hit: 0.2
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    update_min_a: 0.2
+    update_min_d: 0.25
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: False
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /odom
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    enable_groot_monitoring: True
+    groot_zmq_publisher_port: 1666
+    groot_zmq_server_port: 1667
+    plugin_lib_names:
+    - nav2_compute_path_to_pose_action_bt_node
+    - nav2_compute_path_through_poses_action_bt_node
+    - nav2_smooth_path_action_bt_node
+    - nav2_follow_path_action_bt_node
+    - nav2_spin_action_bt_node
+    - nav2_wait_action_bt_node
+    - nav2_back_up_action_bt_node
+    - nav2_drive_on_heading_bt_node
+    - nav2_clear_costmap_service_bt_node
+    - nav2_is_stuck_condition_bt_node
+    - nav2_goal_reached_condition_bt_node
+    - nav2_goal_updated_condition_bt_node
+    - nav2_globally_updated_goal_condition_bt_node
+    - nav2_is_path_valid_condition_bt_node
+    - nav2_initial_pose_received_condition_bt_node
+    - nav2_reinitialize_global_localization_service_bt_node
+    - nav2_rate_controller_bt_node
+    - nav2_distance_controller_bt_node
+    - nav2_speed_controller_bt_node
+    - nav2_truncate_path_action_bt_node
+    - nav2_pipeline_sequence_bt_node
+    - nav2_round_robin_node_bt_node
+    - nav2_transform_available_condition_bt_node
+    - nav2_time_expired_condition_bt_node
+    - nav2_distance_traveled_condition_bt_node
+    - nav2_single_trigger_bt_node
+    - nav2_goal_updated_controller_bt_node
+    - nav2_is_battery_low_condition_bt_node
+    - nav2_navigate_through_poses_action_bt_node
+    - nav2_navigate_to_pose_action_bt_node
+    - nav2_remove_passed_goals_action_bt_node
+    - nav2_planner_selector_bt_node
+    - nav2_controller_selector_bt_node
+    - nav2_goal_checker_selector_bt_node
+    - nav2_controller_cancel_bt_node
+    - nav2_path_longer_on_approach_bt_node
+    - nav2_wait_cancel_bt_node
+    - nav2_spin_cancel_bt_node
+    - nav2_back_up_cancel_bt_node
+    - nav2_assisted_teleop_cancel_bt_node
+    - nav2_drive_on_heading_cancel_bt_node
+
+controller_server:
+  ros__parameters:
+    use_sim_time: False
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["general_goal_checker"] 
+    controller_plugins: ["FollowPath"]
+
+    # --- [PHẦN MỚI THÊM VÀO ĐỂ SỬA LỖI] ---
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
+    
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.25
+      stateful: True
+    # -------------------------------------
+
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: True
+      min_vel_x: -0.25
+      min_vel_y: -0.25
+      max_vel_x: 0.25
+      max_vel_y: 0.25
+      max_vel_theta: 1.0
+      min_speed_xy: 0.05
+      max_speed_xy: 0.25
+      min_speed_theta: 0.0
+      acc_lim_x: 1.5
+      acc_lim_y: 1.5
+      acc_lim_theta: 2.0
+      decel_lim_x: -1.5
+      decel_lim_y: -1.5
+      decel_lim_theta: -2.0
+      vx_samples: 20
+      vy_samples: 20
+      vtheta_samples: 20
+      sim_time: 1.7
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 0.2
+      xy_goal_tolerance: 0.25
+      trans_goal_tolerance: 0.25
+      latch_xy_goal_tolerance: false
+      short_circuit_trajectory_evaluation: true
+      stateful: true
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.1
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+      
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_link
+      use_sim_time: False
+      rolling_window: true
+      width: 3
+      height: 3
+      resolution: 0.05
+      footprint: "[ [0.3, 0.2], [0.3, -0.2], [-0.3, -0.2], [-0.3, 0.2] ]"
+      plugins: ["voxel_layer", "inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: True
+        publish_voxel_map: True
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        max_obstacle_height: 2.0
+        mark_threshold: 0
+        observation_sources: scan
+        scan:
+          topic: /scan_360
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          obstacle_max_range: 2.5
+          inf_is_valid: true
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      use_sim_time: False
+      robot_radius: 0.35
+      resolution: 0.05
+      track_unknown_space: true
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan_360
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          obstacle_max_range: 2.5
+          inf_is_valid: true
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
+
+map_server:
+  ros__parameters:
+    use_sim_time: False
+    yaml_filename: "my_map.yaml"
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 20.0
+    use_sim_time: False
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+behavior_server:
+  ros__parameters:
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "wait", "drive_on_heading"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    drive_on_heading:
+      plugin: "nav2_behaviors/DriveOnHeading"
+
+waypoint_follower:
+  ros__parameters:
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: True
+      waypoint_pause_duration: 200
+================= 4. FILE DIEU KHIEN MOTOR (DRIVER) =================
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Twist, TransformStamped
+from std_msgs.msg import Int32MultiArray
+from tf2_ros import TransformBroadcaster # Thêm thư viện TF
+import serial
+import math
+import time
+
+class RobotDriverMecanum(Node):
+    def __init__(self):
+        super().__init__('robot_driver_mecanum')
+
+        # =========================================================
+        # 1. LOAD THAM SỐ TỪ YAML (Cấu trúc robot.xxx)
+        # =========================================================
+        
+        # Nhóm Geometry (Kích thước vật lý)
+        self.declare_parameter('robot.geometry.R', 0.075)
+        self.declare_parameter('robot.geometry.lx', 0.240)
+        self.declare_parameter('robot.geometry.ly', 0.235)
+        self.declare_parameter('robot.wheels.ticks_per_rev', 6864.0)
+        
+        # Nhóm Comms (Kết nối)
+        self.declare_parameter('robot.comms.bridge.serial_port', '/dev/ttyACM0')
+        self.declare_parameter('robot.comms.bridge.baud', 115200)
+
+        # Nhóm Odom (Cấu hình EKF Logic)
+        self.declare_parameter('robot.odom.publish_tf', True) 
+        self.declare_parameter('robot.frames.odom', 'odom')
+        self.declare_parameter('robot.frames.base_link', 'base_link')
+
+        # --- LẤY GIÁ TRỊ RA BIẾN ---
+        self.R = self.get_parameter('robot.geometry.R').value
+        self.Lx = self.get_parameter('robot.geometry.lx').value
+        self.Ly = self.get_parameter('robot.geometry.ly').value
+        self.L_sum = self.Lx + self.Ly
+        self.TPR = self.get_parameter('robot.wheels.ticks_per_rev').value
+        
+        self.port = self.get_parameter('robot.comms.bridge.serial_port').value
+        self.baud = self.get_parameter('robot.comms.bridge.baud').value
+        
+        # Logic EKF: Có publish TF hay không?
+        self.should_pub_tf = self.get_parameter('robot.odom.publish_tf').value
+        self.frame_odom = self.get_parameter('robot.frames.odom').value
+        self.frame_base = self.get_parameter('robot.frames.base_link').value
+
+        # =========================================================
+        # 2. KHỞI TẠO KẾT NỐI & PUBLISHERS
+        # =========================================================
+        self.ser = None
+        self.connect_serial()
+
+        # Publisher Odom
+        self.pub_odom = self.create_publisher(Odometry, '/odom', 20)
+        
+        # Publisher Debug Ticks
+        self.pub_ticks = self.create_publisher(Int32MultiArray, '/wheel_ticks_debug', 10)
+        
+        # TF Broadcaster (Chỉ khởi tạo nếu cần phát TF)
+        if self.should_pub_tf:
+            self.tf_broadcaster = TransformBroadcaster(self)
+            self.get_logger().info(f"TF Broadcasting ENABLED (Mode: No EKF)")
+        else:
+            self.tf_broadcaster = None
+            self.get_logger().warn(f"TF Broadcasting DISABLED (Mode: EKF Active)")
+
+        self.sub_cmd = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
+
+        # --- BIẾN ODOMETRY ---
+        self.x = 0.0
+        self.y = 0.0
+        self.th = 0.0
+        
+        self.last_ticks = [None, None, None, None]
+        self.last_stamp = None
+        self.MAX_TICK_JUMP = 50000 
+
+        self.create_timer(0.02, self.update_loop) # 50Hz
+        self.get_logger().info(f"Mecanum Driver Started. Port: {self.port}")
+
+    def connect_serial(self):
+        try:
+            if self.ser: self.ser.close()
+            self.ser = serial.Serial(self.port, self.baud, timeout=0.1)
+        except Exception as e:
+            self.get_logger().error(f"Serial connection failed: {e}")
+
+    def update_loop(self):
+        if not self.ser or not self.ser.is_open: return
+        try:
+            # Đọc sạch buffer để chống lag (Kỹ thuật Anti-Lag)
+            data_block = self.ser.read_all().decode('utf-8', errors='ignore')
+            lines = data_block.split('\n')
+            
+            # Tìm dòng hợp lệ mới nhất
+            last_valid_line = None
+            for line in reversed(lines):
+                if "T=" in line:
+                    last_valid_line = line.strip()
+                    break 
+            
+            if last_valid_line:
+                self.process_encoder(last_valid_line)
+                
+        except Exception: pass
+
+    def process_encoder(self, line):
+        try:
+            # Parse dữ liệu: T=100,200,300,400
+            parts = line.split()
+            ticks = []
+            for p in parts:
+                if p.startswith("T="):
+                    val_str = p.split('=')[1]
+                    ticks = [int(x) for x in val_str.split(',')]
+                    break
+            
+            if len(ticks) < 4: return
+
+            # --- FIX CHIỀU QUAY (Tùy chỉnh theo thực tế robot) ---
+            # Nếu robot đi ngược, thêm dấu trừ vào đây
+            ticks[0] = -ticks[0] 
+            ticks[1] = -ticks[1]
+            ticks[2] = -ticks[2]
+            ticks[3] = -ticks[3]
+            
+            self.pub_ticks.publish(Int32MultiArray(data=ticks))
+
+            # Khởi tạo lần đầu
+            if self.last_ticks[0] is None:
+                self.last_ticks = ticks
+                self.last_stamp = self.get_clock().now()
+                return
+
+            # Tính dt
+            now = self.get_clock().now()
+            dt = (now - self.last_stamp).nanoseconds / 1e9
+            if dt < 0.001: dt = 0.001 
+
+            # Tính delta ticks
+            d_ticks = [c - l for c, l in zip(ticks, self.last_ticks)]
+            
+            # Lọc nhiễu đột biến
+            if any(abs(x) > self.MAX_TICK_JUMP for x in d_ticks):
+                self.last_ticks = ticks
+                self.last_stamp = now
+                return
+
+            self.last_ticks = ticks
+            self.last_stamp = now
+
+            # 1. Đổi ticks -> mét
+            m_per_tick = (2 * math.pi * self.R) / self.TPR
+            d_meters = [d * m_per_tick for d in d_ticks]
+            d_fl, d_fr, d_rr, d_rl = d_meters
+
+            # 2. Mecanum Kinematics
+            dx_r = (d_fl + d_fr + d_rr + d_rl) / 4.0
+            dy_r = (-d_fl + d_fr - d_rr + d_rl) / 4.0 
+            dth  = (-d_fl + d_fr + d_rr - d_rl) / (4.0 * self.L_sum)
+
+            # 3. Tích phân vị trí (Odom)
+            self.th += dth
+            # Chuẩn hóa góc -pi đến pi
+            self.th = math.atan2(math.sin(self.th), math.cos(self.th))
+
+            self.x += dx_r * math.cos(self.th) - dy_r * math.sin(self.th)
+            self.y += dx_r * math.sin(self.th) + dy_r * math.cos(self.th)
+
+            # 4. Vận tốc
+            vx = dx_r / dt
+            vy = dy_r / dt
+            wz = dth / dt
+
+            self.publish_odom(vx, vy, wz, now)
+
+        except ValueError: pass
+
+    def publish_odom(self, vx, vy, wz, now_time):
+        # 1. Chuẩn bị Quaternion từ góc Theta
+        qz = math.sin(self.th / 2.0)
+        qw = math.cos(self.th / 2.0)
+
+        # 2. Gửi TF (Nếu được phép)
+        if self.should_pub_tf and self.tf_broadcaster:
+            t = TransformStamped()
+            t.header.stamp = now_time.to_msg()
+            t.header.frame_id = self.frame_odom
+            t.child_frame_id = self.frame_base
+            
+            t.transform.translation.x = self.x
+            t.transform.translation.y = self.y
+            t.transform.translation.z = 0.0
+            
+            t.transform.rotation.x = 0.0
+            t.transform.rotation.y = 0.0
+            t.transform.rotation.z = qz
+            t.transform.rotation.w = qw
+            
+            self.tf_broadcaster.sendTransform(t)
+
+        # 3. Gửi Odom Message
+        msg = Odometry()
+        msg.header.stamp = now_time.to_msg()
+        msg.header.frame_id = self.frame_odom
+        msg.child_frame_id = self.frame_base
+        
+        msg.pose.pose.position.x = self.x
+        msg.pose.pose.position.y = self.y
+        msg.pose.pose.orientation.z = qz
+        msg.pose.pose.orientation.w = qw
+        
+        msg.twist.twist.linear.x = vx
+        msg.twist.twist.linear.y = vy
+        msg.twist.twist.angular.z = wz
+        
+        # Covariance (Độ tin cậy) - Mecanum trượt ngang nên Y cov cao hơn chút
+        cov = [0.01 if i in [0, 7, 14, 21, 28, 35] else 0.0 for i in range(36)]
+        msg.pose.covariance = cov
+        msg.twist.covariance = cov
+        
+        self.pub_odom.publish(msg)
+
+    def cmd_vel_callback(self, msg: Twist):
+        if not self.ser or not self.ser.is_open: return
+        
+        vx = msg.linear.x
+        vy = msg.linear.y
+        wz = msg.angular.z
+        
+        # Gửi lệnh xuống STM32: "V vx vy wz"
+        cmd_str = f"V {vx:.3f} {vy:.3f} {wz:.3f}\n"
+        try:
+            self.ser.write(cmd_str.encode('utf-8'))
+        except: pass
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = RobotDriverMecanum()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+================= 5. FILE HIEN THI BANH XE (VISUAL) =================
+#!/usr/bin/env python3
+import math
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Int32MultiArray
+from geometry_msgs.msg import TransformStamped
+from tf2_ros import TransformBroadcaster
+
+class WheelRotationTF(Node):
+    def __init__(self):
+        super().__init__("wheel_rotation_tf")
+
+        # =========================================================
+        # 1. LOAD THAM SỐ
+        # =========================================================
+        self.declare_parameter('robot.geometry.lx', 0.240)
+        self.declare_parameter('robot.geometry.ly', 0.235)
+        self.declare_parameter('robot.geometry.base_z', 0.0) 
+        self.declare_parameter('robot.wheels.ticks_per_rev', 6864.0)
+        self.declare_parameter('ticks_topic', '/wheel_ticks_debug')
+
+        self.lx = self.get_parameter('robot.geometry.lx').value
+        self.ly = self.get_parameter('robot.geometry.ly').value
+        self.z  = self.get_parameter('robot.geometry.base_z').value
+        self.TPR = self.get_parameter('robot.wheels.ticks_per_rev').value
+        topic_name = self.get_parameter('ticks_topic').value
+
+        self.get_logger().info(f"Visualizer Fixed Order: FL-FR-RR-RL")
+
+        # =========================================================
+        # 2. SỬA LỖI VỊ TRÍ (MAPPING LẠI THEO DATA THỰC TẾ)
+        # =========================================================
+        self.parent_frame = "base_link"
+        
+        # Mảng dữ liệu từ mạch gửi lên: [0, 1, 2, 3]
+        # Dựa trên test của bạn: 
+        # - Data[0] đang lái bánh FR (Vì code cũ Index 0 là FL mà lại chạy FR -> Data 0 là FR)
+        # - Data[1] đang lái bánh FL
+        # - Data[2] đang lái bánh RL
+        # - Data[3] đang lái bánh RR
+        
+        self.wheel_positions = [
+            ( -self.lx,  -self.ly, self.z), 
+            ( -self.lx,  self.ly, self.z), 
+            (self.lx,  self.ly, self.z), # [2] RL (Sau Trái)   -> (-x, +y)
+            (self.lx, -self.ly, self.z)  # [3] RR (Sau Phải)   -> (-x, -y)
+        ]
+        
+        self.child_frames = [
+            "wheel_fl_visual",
+            "wheel_fr_visual", 
+            "wheel_rr_visual",
+            "wheel_rl_visual", 
+        ]
+
+        # =========================================================
+        # 3. SỬA LỖI TRỤC QUAY NGƯỢC
+        # =========================================================
+        # Nếu bạn thấy trục X (Màu đỏ) quay về phía sau, ta cần đảo dấu
+        # Hoặc xoay trục 180 độ. Ở đây mình đảo chiều quay encoder.
+        self.encoder_direction = -1.0 # Đổi thành 1.0 nếu muốn quay ngược lại
+
+        self.prev_ticks = [None, None, None, None]
+        self.theta = [0.0, 0.0, 0.0, 0.0]
+
+        self.tf_br = TransformBroadcaster(self)
+        self.sub_ticks = self.create_subscription(Int32MultiArray, topic_name, self.ticks_cb, 10)
+
+    def ticks_cb(self, msg):
+        current_ticks = msg.data
+        if len(current_ticks) < 4: return
+
+        if self.prev_ticks[0] is None:
+            self.prev_ticks = current_ticks
+            return
+
+        for i in range(4):
+            delta = current_ticks[i] - self.prev_ticks[i]
+            
+            # Tính góc quay (có nhân thêm chiều direction)
+            d_angle = (delta / self.TPR) * (2 * math.pi) * self.encoder_direction
+            self.theta[i] += d_angle
+            
+        self.prev_ticks = current_ticks
+        self.publish_wheel_tf(self.get_clock().now())
+
+    def publish_wheel_tf(self, now):
+        def make_tf(child, x, y, z, angle):
+            t = TransformStamped()
+            t.header.stamp = now.to_msg()
+            t.header.frame_id = self.parent_frame
+            t.child_frame_id = child
+            
+            t.transform.translation.x = float(x)
+            t.transform.translation.y = float(y)
+            t.transform.translation.z = float(z)
+            
+            # Xoay quanh trục Y (Pitch)
+            cy = math.cos(angle * 0.5)
+            sy = math.sin(angle * 0.5)
+            
+            # Quaternion chuẩn (X-Forward, Y-Left, Z-Up)
+            t.transform.rotation.x = 0.0
+            t.transform.rotation.y = sy
+            t.transform.rotation.z = 0.0
+            t.transform.rotation.w = cy
+            return t
+
+        tfs = []
+        for i in range(4):
+            wx, wy, wz = self.wheel_positions[i]
+            tfs.append(make_tf(self.child_frames[i], wx, wy, wz, self.theta[i]))
+            
+        self.tf_br.sendTransform(tfs)
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = WheelRotationTF()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == "__main__":
+    main()

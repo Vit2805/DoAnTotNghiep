@@ -28,37 +28,38 @@ class WheelRotationTF(Node):
         self.get_logger().info(f"Visualizer Fixed Order: FL-FR-RR-RL")
 
         # =========================================================
-        # 2. SỬA LỖI VỊ TRÍ (MAPPING LẠI THEO DATA THỰC TẾ)
+        # 2. SỬA LỖI VỊ TRÍ (MAPPING CHUẨN: FL - FR - RR - RL)
         # =========================================================
         self.parent_frame = "base_link"
         
-        # Mảng dữ liệu từ mạch gửi lên: [0, 1, 2, 3]
-        # Dựa trên test của bạn: 
-        # - Data[0] đang lái bánh FR (Vì code cũ Index 0 là FL mà lại chạy FR -> Data 0 là FR)
-        # - Data[1] đang lái bánh FL
-        # - Data[2] đang lái bánh RL
-        # - Data[3] đang lái bánh RR
-        
+        # Thứ tự Data nhận được: [0]=FL, [1]=FR, [2]=RR, [3]=RL
+        # Quy tắc tọa độ ROS: 
+        # - X Dương: Phía Trước
+        # - Y Dương: Bên Trái
         self.wheel_positions = [
-            ( -self.lx,  -self.ly, self.z), 
-            ( -self.lx,  self.ly, self.z), 
-            (self.lx,  self.ly, self.z), # [2] RL (Sau Trái)   -> (-x, +y)
-            (self.lx, -self.ly, self.z)  # [3] RR (Sau Phải)   -> (-x, -y)
+            ( self.lx,  self.ly, self.z),  # [0] FL (Trước Trái): X+, Y+
+            ( self.lx, -self.ly, self.z),  # [1] FR (Trước Phải): X+, Y-
+            (-self.lx, -self.ly, self.z),  # [2] RR (Sau Phải):   X-, Y-
+            (-self.lx,  self.ly, self.z)   # [3] RL (Sau Trái):   X-, Y+
         ]
         
+        # Tên tương ứng (Phải khớp thứ tự trên)
         self.child_frames = [
             "wheel_fl_visual",
-            "wheel_fr_visual", 
+            "wheel_fr_visual",
             "wheel_rr_visual",
             "wheel_rl_visual", 
         ]
+
+        # Sửa chiều quay (Thử để 1.0 trước, nếu ngược thì đổi thành -1.0)
+        self.encoder_direction = 1.0
 
         # =========================================================
         # 3. SỬA LỖI TRỤC QUAY NGƯỢC
         # =========================================================
         # Nếu bạn thấy trục X (Màu đỏ) quay về phía sau, ta cần đảo dấu
         # Hoặc xoay trục 180 độ. Ở đây mình đảo chiều quay encoder.
-        self.encoder_direction = -1.0 # Đổi thành 1.0 nếu muốn quay ngược lại
+        self.encoder_direction = 1.0 # Đổi thành 1.0 nếu muốn quay ngược lại
 
         self.prev_ticks = [None, None, None, None]
         self.theta = [0.0, 0.0, 0.0, 0.0]
