@@ -14,11 +14,11 @@ ekf_filter_node:
     # --------------------------------------
     odom0: /wheel/odom
     odom0_config: [
-      true,  true,  false,   # X, Y (Lấy vị trí), Z
-      false, false, false,   # Roll, Pitch, Yaw ( TẮT YAW đi, bánh xe đo góc tệ lắm)
-      true,  true,  false,   # Vx, Vy (✔ BẬT Vy vì là Mecanum), Vz
-      false, false, false,   # Vroll, Vpitch, Vyaw (Tắt Vyaw để nhường cho IMU)
-      false, false, false    # Ax, Ay, Az
+      false, false, false,   
+      false, false, false,   
+      true,  true,  false,   # Giữ nguyên Vx, Vy (True)
+      false, false, false,   
+      false, false, false    
     ]
     odom0_differential: false
     odom0_relative: false

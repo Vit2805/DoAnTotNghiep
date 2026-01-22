@@ -1,285 +1,217 @@
+import math
+import numpy as np
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import LaserScan
+from rcl_interfaces.msg import ParameterDescriptor
 
+class ScanMerger360(Node):
+    def __init__(self):
+        super().__init__('scan_merger_360')
+        
+        # ==================== PARAMETERS ====================
+        desc = ParameterDescriptor(dynamic_typing=True)
+        self.declare_parameter('front_topic', '/scan_front', descriptor=desc)
+        self.declare_parameter('rear_topic', '/scan_rear', descriptor=desc)
+        self.declare_parameter('output_topic', '/scan_360', descriptor=desc)
+        self.declare_parameter('target_frame', 'base_link', descriptor=desc)
 
-import math 
-from typing import List ,Optional ,Tuple 
+        # Cấu hình vị trí Lidar (Khớp với TF Static trong Launch file)
+        self.declare_parameter('front_tx', 0.42)
+        self.declare_parameter('front_ty', 0.29)
+        self.declare_parameter('front_yaw', 3.14159)
+        self.declare_parameter('rear_tx', -0.42)
+        self.declare_parameter('rear_ty', -0.29)
+        self.declare_parameter('rear_yaw', 0.0)
 
-import rclpy 
-from rclpy .node import Node 
-from rclpy .duration import Duration 
-from rcl_interfaces .msg import ParameterDescriptor 
-from sensor_msgs .msg import LaserScan 
-from geometry_msgs .msg import TransformStamped 
-import tf2_ros 
-from tf2_ros import TransformException 
+        # Cấu hình Masking (Lọc vỏ xe) - QUAN TRỌNG
+        self.declare_parameter('front_mask_box', [0.0, 0.40, -0.1, 0.30], descriptor=desc)
+        self.declare_parameter('rear_mask_box', [0.0, 0.40, -0.1, 0.30], descriptor=desc)
+        self.declare_parameter('body_polygon', [], descriptor=desc)
 
+        self.declare_parameter('range_min', 0.05)
+        self.declare_parameter('range_max', 12.0)
+        self.declare_parameter('angle_increment', 0.01745) # ~1 độ
+        self.declare_parameter('scan_frequency', 15.0)
 
-def yaw_from_quat (x :float ,y :float ,z :float ,w :float )->float :
-    siny_cosp =2.0 *(w *z +x *y )
-    cosy_cosp =1.0 -2.0 *(y *y +z *z )
-    return math .atan2 (siny_cosp ,cosy_cosp )
+        # ==================== GET VALUES ====================
+        self.front_topic = self.get_parameter('front_topic').value
+        self.rear_topic = self.get_parameter('rear_topic').value
+        self.output_topic = self.get_parameter('output_topic').value
+        self.output_frame = self.get_parameter('target_frame').value
 
+        self.f_tx = self.get_parameter('front_tx').value
+        self.f_ty = self.get_parameter('front_ty').value
+        self.f_yaw = self.get_parameter('front_yaw').value
 
-def point_in_polygon (px :float ,py :float ,poly_xy :List [float ])->bool :
-    if not poly_xy or len (poly_xy )<6 :
-        return False 
-    n =len (poly_xy )//2 
-    inside =False 
-    j =n -1 
-    for i in range (n ):
-        xi ,yi =poly_xy [2 *i ],poly_xy [2 *i +1 ]
-        xj ,yj =poly_xy [2 *j ],poly_xy [2 *j +1 ]
-        intersect =((yi >py )!=(yj >py ))and (px <(xj -xi )*(py -yi )/(yj -yi +1e-12 )+xi )
-        if intersect :
-            inside =not inside 
-        j =i 
-    return inside 
+        self.r_tx = self.get_parameter('rear_tx').value
+        self.r_ty = self.get_parameter('rear_ty').value
+        self.r_yaw = self.get_parameter('rear_yaw').value
 
+        self.range_min = self.get_parameter('range_min').value
+        self.range_max = self.get_parameter('range_max').value
+        self.angle_inc = self.get_parameter('angle_increment').value
+        freq = self.get_parameter('scan_frequency').value
 
-def parse_box (box_param )->Optional [Tuple [float ,float ,float ,float ]]:
-    if box_param is None :
-        return None 
-    if isinstance (box_param ,(list ,tuple ))and len (box_param )==4 :
-        return float (box_param [0 ]),float (box_param [1 ]),float (box_param [2 ]),float (box_param [3 ])
-    if isinstance (box_param ,str ):
-        try :
-            parts =[float (p .strip ())for p in box_param .replace ('[','').replace (']','').split (',')]
-            if len (parts )==4 :
-                return parts [0 ],parts [1 ],parts [2 ],parts [3 ]
-        except Exception :
-            return None 
-    return None 
+        self.front_mask = self.parse_box(self.get_parameter('front_mask_box').value)
+        self.rear_mask = self.parse_box(self.get_parameter('rear_mask_box').value)
+        self.body_polygon = self.parse_polygon(self.get_parameter('body_polygon').value)
 
+        # ==================== INIT ====================
+        self.create_subscription(LaserScan, self.front_topic, self.front_cb, 10)
+        self.create_subscription(LaserScan, self.rear_topic, self.rear_cb, 10)
+        self.pub = self.create_publisher(LaserScan, self.output_topic, 10)
 
-def parse_polygon (poly_param )->List [float ]:
+        self.scan_front = None
+        self.scan_rear = None
 
-    if poly_param is None :
+        # Tính toán trước các bins
+        self.angle_min = -math.pi
+        self.angle_max = math.pi
+        self.num_bins = int(np.ceil((self.angle_max - self.angle_min) / self.angle_inc))
+        
+        # Timer chạy độc lập để ổn định FPS
+        self.create_timer(1.0 / freq, self.timer_cb)
+        self.get_logger().info('Numpy Merger V2 (With Masking) Started')
+
+    # --- Tiện ích Parse Param ---
+    def parse_box(self, val):
+        if isinstance(val, (list, tuple)) and len(val) == 4: return val
+        return None
+
+    def parse_polygon(self, val):
+        # Hỗ trợ list phẳng [x1, y1, x2, y2...]
+        if isinstance(val, (list, tuple)) and len(val) >= 6: return val
         return []
 
-    if isinstance (poly_param ,(list ,tuple )):
-        try :
-            vals =[float (v )for v in poly_param ]
-            return vals if len (vals )>=6 and len (vals )%2 ==0 else []
-        except Exception :
-            return []
+    def front_cb(self, msg): self.scan_front = msg
+    def rear_cb(self, msg): self.scan_rear = msg
 
-    if isinstance (poly_param ,str ):
-        s =poly_param .strip ()
-        s =s .replace ('[','').replace (']','')
+    # --- Xử lý Numpy (Đã thêm Masking) ---
+    def process_lidar_numpy(self, scan_msg, tx, ty, yaw, mask_box):
+        if scan_msg is None: return None, None
+        
+        ranges = np.array(scan_msg.ranges)
+        # Tạo mảng góc
+        angles = np.linspace(scan_msg.angle_min, 
+                             scan_msg.angle_min + scan_msg.angle_increment * (len(ranges)-1), 
+                             len(ranges))
+        
+        # 1. Lọc dữ liệu rác
+        valid = (ranges >= self.range_min) & (ranges <= self.range_max) & (np.isfinite(ranges))
+        r_v = ranges[valid]
+        a_v = angles[valid]
+        
+        # 2. Tính tọa độ Sensor Frame (để lọc Mask Box)
+        cos_a = np.cos(a_v)
+        sin_a = np.sin(a_v)
+        x_s = r_v * cos_a
+        y_s = r_v * sin_a
 
-        try :
-            vals =[float (p .strip ())for p in s .split (',')if p .strip ()!='']
-            if len (vals )>=6 and len (vals )%2 ==0 :
-                return vals 
-        except Exception :
-            pass 
+        # 3. ÁP DỤNG MASK BOX (Lọc điểm trúng vỏ xe)
+        if mask_box:
+            xmin, xmax, ymin, ymax = mask_box
+            # Giữ lại những điểm NẰM NGOÀI hộp
+            mask_keep = ~((x_s >= xmin) & (x_s <= xmax) & (y_s >= ymin) & (y_s <= ymax))
+            x_s = x_s[mask_keep]
+            y_s = y_s[mask_keep]
+            r_v = r_v[mask_keep] # Cập nhật lại r để dùng sau
 
-        try :
-            pairs =[]
-            for token in s .split (','):
-                parts =token .strip ().split ()
-                if len (parts )==2 :
-                    pairs .extend ([float (parts [0 ]),float (parts [1 ])])
-            return pairs if len (pairs )>=6 and len (pairs )%2 ==0 else []
-        except Exception :
-            return []
+        if len(x_s) == 0: return None, None
 
-    return []
+        # 4. Transform sang Base Frame
+        cos_yaw = math.cos(yaw)
+        sin_yaw = math.sin(yaw)
+        x_b = tx + x_s * cos_yaw - y_s * sin_yaw
+        y_b = ty + x_s * sin_yaw + y_s * cos_yaw
+        
+        # 5. Đổi lại sang Polar (Base Frame)
+        # Lưu ý: Ta tính lại góc angle_b nhưng giữ nguyên r_v (khoảng cách thực)
+        # Hoặc tính lại r_b từ x_b, y_b (chính xác hơn cho map)
+        r_b = np.sqrt(x_b**2 + y_b**2)
+        angle_b = np.arctan2(y_b, x_b)
+        
+        return r_b, angle_b
 
+    def point_in_polygon_fast(self, r_arr, ang_arr, poly):
+        # Lọc Polygon đơn giản trên Base Frame
+        if not poly: return
+        x = r_arr * np.cos(ang_arr)
+        y = r_arr * np.sin(ang_arr)
+        
+        # Ray casting algorithm (phiên bản đơn giản cho list điểm)
+        n = len(poly) // 2
+        inside = np.zeros(len(x), dtype=bool)
+        
+        px = poly[0::2]
+        py = poly[1::2]
+        
+        j = n - 1
+        for i in range(n):
+            xi, yi = px[i], py[i]
+            xj, yj = px[j], py[j]
+            
+            intersect = ((yi > y) != (yj > y)) & \
+                        (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi)
+            inside ^= intersect
+            j = i
+            
+        # Gán vô cực cho điểm nằm trong polygon
+        r_arr[inside] = np.inf
 
-class ScanMerger360 (Node ):
-    def __init__ (self ):
-        super ().__init__ ('scan_merger_360')
-        desc =ParameterDescriptor (dynamic_typing =True )
+    def timer_cb(self):
+        merged_ranges = np.full(self.num_bins, np.inf, dtype=np.float32)
+        
+        # --- FIX TIMESTAMP: Lấy giờ của Lidar thay vì giờ hệ thống ---
+        out_stamp = self.get_clock().now().to_msg()
+        if self.scan_front: out_stamp = self.scan_front.header.stamp
+        if self.scan_rear and self.scan_front:
+            if self.scan_rear.header.stamp.sec > self.scan_front.header.stamp.sec:
+                out_stamp = self.scan_rear.header.stamp
 
-        self .declare_parameter ('front_topic','/scan_front',descriptor =desc )
-        self .declare_parameter ('rear_topic','/scan_rear',descriptor =desc )
-        self .declare_parameter ('target_frame','base_link',descriptor =desc )
-        self .declare_parameter ('output_topic','/scan_360',descriptor =desc )
+        # Xử lý Front
+        r_f, a_f = self.process_lidar_numpy(self.scan_front, self.f_tx, self.f_ty, self.f_yaw, self.front_mask)
+        if r_f is not None:
+            idx = ((a_f - self.angle_min) / self.angle_inc).astype(int)
+            mask = (idx >= 0) & (idx < self.num_bins)
+            np.minimum.at(merged_ranges, idx[mask], r_f[mask])
 
-        self .declare_parameter ('angle_min',-math .pi ,descriptor =desc )
-        self .declare_parameter ('angle_max',math .pi ,descriptor =desc )
-        self .declare_parameter ('angle_increment',math .radians (1.0 ),descriptor =desc )
-        self .declare_parameter ('range_min',0.05 ,descriptor =desc )
-        self .declare_parameter ('range_max',12.0 ,descriptor =desc )
-        self .declare_parameter ('publish_rate_hz',10.0 ,descriptor =desc )
-        self .declare_parameter ('use_inf',True ,descriptor =desc )
+        # Xử lý Rear
+        r_r, a_r = self.process_lidar_numpy(self.scan_rear, self.r_tx, self.r_ty, self.r_yaw, self.rear_mask)
+        if r_r is not None:
+            idx = ((a_r - self.angle_min) / self.angle_inc).astype(int)
+            mask = (idx >= 0) & (idx < self.num_bins)
+            np.minimum.at(merged_ranges, idx[mask], r_r[mask])
 
-        self .declare_parameter ('front_mask_box',[0.0 ,0.40 ,-0.1 ,0.30 ],descriptor =desc )
-        self .declare_parameter ('rear_mask_box',[0.0 ,0.40 ,-0.1 ,0.30 ],descriptor =desc )
-        self .declare_parameter ('body_polygon',[],descriptor =desc )
+        # Lọc Body Polygon (Nếu có)
+        if self.body_polygon:
+            # Tạo mảng góc cho merged_ranges
+            merged_angles = self.angle_min + np.arange(self.num_bins) * self.angle_inc
+            # Chỉ check những điểm hữu hạn
+            finite_mask = np.isfinite(merged_ranges)
+            if np.any(finite_mask):
+                self.point_in_polygon_fast(merged_ranges, merged_angles, self.body_polygon)
 
-        self .front_topic =self .get_parameter ('front_topic').get_parameter_value ().string_value 
-        self .rear_topic =self .get_parameter ('rear_topic').get_parameter_value ().string_value 
-        self .target_frame =self .get_parameter ('target_frame').get_parameter_value ().string_value 
-        self .output_topic =self .get_parameter ('output_topic').get_parameter_value ().string_value 
+        # Publish
+        msg = LaserScan()
+        msg.header.stamp = out_stamp
+        msg.header.frame_id = self.output_frame
+        msg.angle_min = self.angle_min
+        msg.angle_max = self.angle_max
+        msg.angle_increment = self.angle_inc
+        msg.scan_time = 1.0 / 15.0
+        msg.range_min = self.range_min
+        msg.range_max = self.range_max
+        msg.ranges = merged_ranges.tolist()
+        
+        self.pub.publish(msg)
 
-        self .angle_min =float (self .get_parameter ('angle_min').value )
-        self .angle_max =float (self .get_parameter ('angle_max').value )
-        self .angle_inc =float (self .get_parameter ('angle_increment').value )
-        self .range_min =float (self .get_parameter ('range_min').value )
-        self .range_max =float (self .get_parameter ('range_max').value )
-        self .use_inf =bool (self .get_parameter ('use_inf').value )
+def main(args=None):
+    rclpy.init(args=args)
+    node = ScanMerger360()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
 
-
-        if self .angle_inc <=0.0 or self .angle_max <=self .angle_min :
-            self .get_logger ().error (
-            f"Invalid angle config: angle_min={self.angle_min}, "
-            f"angle_max={self.angle_max}, angle_inc={self.angle_inc}. "
-            "Reset to defaults: [-pi, +pi], inc=1 deg."
-            )
-            self .angle_min =-math .pi 
-            self .angle_max =math .pi 
-            self .angle_inc =math .radians (1.0 )
-
-        self .pub_rate_hz =float (self .get_parameter ('publish_rate_hz').value )
-        self .body_polygon =parse_polygon (self .get_parameter ('body_polygon').value )
-        self .front_mask =parse_box (self .get_parameter ('front_mask_box').value )
-        self .rear_mask =parse_box (self .get_parameter ('rear_mask_box').value )
-
-        self .tf_buffer =tf2_ros .Buffer (cache_time =Duration (seconds =5.0 ))
-        self .tf_listener =tf2_ros .TransformListener (self .tf_buffer ,self )
-
-        self .sub_front =self .create_subscription (LaserScan ,self .front_topic ,self ._on_front ,10 )
-        self .sub_rear =self .create_subscription (LaserScan ,self .rear_topic ,self ._on_rear ,10 )
-        self .pub =self .create_publisher (LaserScan ,self .output_topic ,10 )
-
-        self .last_front :Optional [LaserScan ]=None 
-        self .last_rear :Optional [LaserScan ]=None 
-
-        period =1.0 /max (1e-3 ,self .pub_rate_hz )
-        self .timer =self .create_timer (period ,self ._tick )
-
-        self .get_logger ().info (
-        f"scan_merger_360: target_frame={self.target_frame}, out={self.output_topic}, "
-        f"bins={int(round((self.angle_max - self.angle_min) / self.angle_inc))}, "
-        f"front='{self.front_topic}', rear='{self.rear_topic}'"
-        )
-        if self .body_polygon :
-            self .get_logger ().info (f"Body polygon vertices: {len(self.body_polygon) // 2} points")
-
-    def _on_front (self ,msg :LaserScan ):
-        self .last_front =msg 
-
-    def _on_rear (self ,msg :LaserScan ):
-        self .last_rear =msg 
-
-    def _tick (self ):
-
-        if self .angle_inc <=0.0 or self .angle_max <=self .angle_min :
-            return 
-
-        scans =[s for s in [self .last_front ,self .last_rear ]if s is not None ]
-        if not scans :
-            return 
-
-        bins =int (round ((self .angle_max -self .angle_min )/self .angle_inc ))
-        angle_max_exact =self .angle_min +bins *self .angle_inc 
-        if angle_max_exact <self .angle_max -1e-6 :
-            bins +=1 
-        ranges =[math .inf ]*bins 
-
-        for scan in scans :
-            self ._accumulate_scan (scan ,ranges )
-
-        if self .body_polygon :
-            for i in range (bins ):
-                r =ranges [i ]
-                if not math .isfinite (r ):
-                    continue 
-                ang =self .angle_min +i *self .angle_inc 
-                x =r *math .cos (ang )
-                y =r *math .sin (ang )
-                if point_in_polygon (x ,y ,self .body_polygon ):
-                    ranges [i ]=math .inf 
-
-        out =LaserScan ()
-        now =self .get_clock ().now ().to_msg ()
-        out .header .frame_id =self .target_frame 
-        out .header .stamp =now 
-        out .angle_min =self .angle_min 
-        out .angle_max =self .angle_min +(bins -1 )*self .angle_inc 
-        out .angle_increment =self .angle_inc 
-        out .time_increment =0.0 
-        out .scan_time =1.0 /self .pub_rate_hz 
-        out .range_min =self .range_min 
-        out .range_max =self .range_max 
-        out .ranges =[]
-        for r in ranges :
-            if math .isfinite (r )and (self .range_min <=r <=self .range_max ):
-                out .ranges .append (r )
-            else :
-                out .ranges .append (math .inf if self .use_inf else 0.0 )
-        self .pub .publish (out )
-
-    def _accumulate_scan (self ,scan :LaserScan ,ranges_out :List [float ]):
-        src =scan .header .frame_id 
-        try :
-            t :TransformStamped =self .tf_buffer .lookup_transform (
-            self .target_frame ,src ,scan .header .stamp ,timeout =Duration (seconds =0.05 )
-            )
-        except TransformException as e :
-            self .get_logger ().warning (f"TF {src}->{self.target_frame} fail: {e}")
-            return 
-
-        tx =t .transform .translation .x 
-        ty =t .transform .translation .y 
-        qx =t .transform .rotation .x 
-        qy =t .transform .rotation .y 
-        qz =t .transform .rotation .z 
-        qw =t .transform .rotation .w 
-        yaw =yaw_from_quat (qx ,qy ,qz ,qw )
-        cy =math .cos (yaw )
-        sy =math .sin (yaw )
-
-        mask_box =None 
-        if src .endswith ('lidar_front')or src =='lidar_front':
-            mask_box =self .front_mask 
-        elif src .endswith ('lidar_rear')or src =='lidar_rear':
-            mask_box =self .rear_mask 
-
-        a =scan .angle_min 
-        inc =scan .angle_increment 
-        n =len (scan .ranges )
-        for i in range (n ):
-            r =scan .ranges [i ]
-            if not math .isfinite (r )or r <scan .range_min or r >scan .range_max :
-                continue 
-            ang =a +i *inc 
-
-            lx =r *math .cos (ang )
-            ly =r *math .sin (ang )
-
-            if mask_box is not None :
-                xmin ,xmax ,ymin ,ymax =mask_box 
-                if (xmin <=lx <=xmax )and (ymin <=ly <=ymax ):
-                    continue 
-
-            bx =cy *lx -sy *ly +tx 
-            by =sy *lx +cy *ly +ty 
-
-            rr =math .hypot (bx ,by )
-            if rr <self .range_min or rr >self .range_max :
-                continue 
-
-            theta =math .atan2 (by ,bx )
-            idx =int (round ((theta -self .angle_min )/self .angle_inc ))
-            if 0 <=idx <len (ranges_out ):
-                if rr <ranges_out [idx ]:
-                    ranges_out [idx ]=rr 
-
-
-def main ():
-    rclpy .init ()
-    node =ScanMerger360 ()
-    try :
-        rclpy .spin (node )
-    except KeyboardInterrupt :
-        pass 
-    finally :
-        node .destroy_node ()
-        rclpy .shutdown ()
-
-
-if __name__ =='__main__':
-    main ()
-
+if __name__ == '__main__':
+    main()
