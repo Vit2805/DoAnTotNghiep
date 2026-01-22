@@ -1,134 +1,254 @@
-#!/usr/bin/env python3
-import rclpy
-from rclpy.node import Node
-from geometry_msgs.msg import Twist
-import sys, select, termios, tty
 
-# --- CẤU HÌNH ---
-# Tốc độ tối đa
-MAX_SPEED = 0.5   # m/s
-MAX_TURN  = 1.5   # rad/s
 
-# ĐỘ MƯỢT (Gia tốc) - Số càng nhỏ thì càng mượt nhưng càng trễ
-# 0.01 = Rất mượt (như lái tàu)
-# 0.1  = Bốc (như xe đua)
-ACCEL_STEP = 0.05 
 
-msg = """
-ĐIỀU KHIỂN ROBOT MECANUM (CÓ GIA TỐC)
----------------------------
-        W    
-   A    S    D
-   
-   Q (Xoay) E
-   
-SPACE: Phanh từ từ
-CTRL-C: Thoát
+
+import sys 
+import termios 
+import tty 
+import select 
+from typing import Optional 
+
+import rclpy 
+from rclpy .node import Node 
+from rclpy .parameter import Parameter 
+from rcl_interfaces .msg import ParameterDescriptor 
+from geometry_msgs .msg import Twist 
+
+HELP =r"""
+---------------- TELEOP (2 CHẾ ĐỘ) ----------------
+[ SNAP MODE ]  (đặt ngay tốc độ = ±max×scale)
+  W/S: tiến / lùi
+  A/D: trái / phải (strafe)
+  Q/E: quay trái / quay phải
+
+[ INCREMENTAL MODE ]  (tích tốc – bấm nhiều lần sẽ cộng dồn)
+  I/K: +vx / -vx (tiến / lùi)
+  J/L: +vy / -vy (trái / phải)
+  U/O: +wz / -wz (quay trái / quay phải)
+  m / .: giảm / tăng scale (độ nhạy bước)
+  SPACE: dừng (vx=vy=wz=0)
+
+P: in trạng thái hiện tại   |   H hoặc ?: hiện trợ giúp   |   Ctrl+C: thoát
+----------------------------------------------------
 """
 
-MOVE_BINDINGS = {
-    'w': (1, 0, 0, 0),
-    's': (-1, 0, 0, 0),
-    'a': (0, 1, 0, 0),
-    'd': (0, -1, 0, 0),
-    'q': (0, 0, 0, 1),
-    'e': (0, 0, 0, -1),
-    ' ': (0, 0, 0, 0),
+class TeleopWASDV2 (Node ):
+    def __init__ (self ):
+        super ().__init__ ("teleop_wasd_v2")
 
-    'u': (1, 1, 0, 0),   # Tiến + Trái (Forward-Left)
-    'o': (1, -1, 0, 0),  # Tiến + Phải (Forward-Right)
-    'j': (-1, 1, 0, 0),  # Lùi + Trái (Back-Left)
-    'l': (-1, -1, 0, 0), # Lùi + Phải (Back-Right)
-}
 
-def getKey(settings):
-    tty.setraw(sys.stdin.fileno())
-    # Timeout 0.1s giúp vòng lặp chạy liên tục để tính toán gia tốc
-    rlist, _, _ = select.select([sys.stdin], [], [], 0.1) 
-    if rlist:
-        key = sys.stdin.read(1)
-    else:
-        key = ''
-    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
-    return key
+        self .R =self ._get_required_double ("robot.geometry.R")
+        self .lx =self ._get_required_double ("robot.geometry.lx")
+        self .ly =self ._get_required_double ("robot.geometry.ly")
+        self .L =self .lx +self .ly 
 
-# Hàm tạo dốc (Ramp Function)
-def ramp_vel(current, target, step):
-    if target > current:
-        return min(target, current + step)
-    elif target < current:
-        return max(target, current - step)
-    else:
-        return target
+        self .wheel_max_rpm =self ._get_required_double ("robot.drivetrain.wheel_max_rpm")
+        self .limit_scale_safety =self ._get_required_double ("robot.drivetrain.limit_scale_safety")
 
-def main():
-    settings = termios.tcgetattr(sys.stdin)
-    
-    rclpy.init()
-    node = rclpy.create_node('mecanum_teleop_smooth')
-    pub = node.create_publisher(Twist, '/cmd_vel', 10)
 
-    print(msg)
-    
-    # Biến lưu trạng thái mục tiêu (Người dùng muốn đi đâu)
-    target_x = 0.0
-    target_y = 0.0
-    target_th = 0.0
+        self .max_vx =self ._get_optional_double ("bridge_limits.max_vx")
+        self .max_vy =self ._get_optional_double ("bridge_limits.max_vy")
+        self .max_wz =self ._get_optional_double ("bridge_limits.max_wz")
+        self ._auto_compute_limits_if_needed ()
 
-    # Biến lưu trạng thái hiện tại (Robot đang đi thế nào)
-    current_x = 0.0
-    current_y = 0.0
-    current_th = 0.0
 
-    try:
-        while True:
-            key = getKey(settings)
-            
-            # 1. ĐỌC LỆNH TỪ BÀN PHÍM (Xác định mục tiêu)
-            if key in MOVE_BINDINGS.keys():
-                target_x = MOVE_BINDINGS[key][0] * MAX_SPEED
-                target_y = MOVE_BINDINGS[key][1] * MAX_SPEED
-                target_th = MOVE_BINDINGS[key][3] * MAX_TURN
-            
-            elif key == '\x03': # Ctrl-C
-                break
-            
-            else:
-                # Nếu nhả phím -> Mục tiêu về 0 (để giảm tốc từ từ)
-                target_x = 0.0
-                target_y = 0.0
-                target_th = 0.0
+        self .rate_hz =self ._get_int ("teleop.rate_hz",20 )
+        self .scale =self ._clip (self ._get_double ("teleop.init_scale",0.5 ),0.0 ,1.0 )
+        self .step_scale =self ._get_double ("teleop.step_scale",0.1 )
+        self .inc_lin_frac =self ._clip (self ._get_double ("teleop.inc_lin_frac",0.10 ),0.0 ,1.0 )
+        self .inc_ang_frac =self ._clip (self ._get_double ("teleop.inc_ang_frac",0.10 ),0.0 ,1.0 )
 
-            # 2. TÍNH TOÁN GIA TỐC (Làm mượt)
-            # Thay vì gán thẳng, ta nhích dần current về phía target
-            current_x = ramp_vel(current_x, target_x, ACCEL_STEP)
-            current_y = ramp_vel(current_y, target_y, ACCEL_STEP)
-            current_th = ramp_vel(current_th, target_th, ACCEL_STEP)
 
-            # 3. GỬI LỆNH ĐI
-            twist = Twist()
-            twist.linear.x = current_x
-            twist.linear.y = current_y
-            twist.linear.z = 0.0
-            twist.angular.x = 0.0
-            twist.angular.y = 0.0
-            twist.angular.z = current_th
-            pub.publish(twist)
+        self .pub =self .create_publisher (Twist ,"cmd_vel",10 )
+        self .timer =self .create_timer (1.0 /float (max (1 ,self .rate_hz )),self ._on_timer_pub )
 
-            # In ra trạng thái để debug
-            # \r để ghi đè dòng cũ, tránh spam terminal
-            print(f"\rSpeed: X={current_x:.2f}, Y={current_y:.2f}, W={current_th:.2f}   ", end="")
 
-    except Exception as e:
-        print(e)
+        self .vx =0.0 
+        self .vy =0.0 
+        self .wz =0.0 
 
-    finally:
-        twist = Twist()
-        twist.linear.x = 0.0; twist.linear.y = 0.0; twist.angular.z = 0.0
-        pub.publish(twist)
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
-        node.destroy_node()
-        rclpy.shutdown()
+        self .get_logger ().info (HELP )
+        self .get_logger ().info (self ._readable_limits ())
+        self ._print_status ()
 
-if __name__ == '__main__':
-    main()
+
+        self ._old_term_attrs =termios .tcgetattr (sys .stdin .fileno ())
+        tty .setcbreak (sys .stdin .fileno ())
+        self .key_timer =self .create_timer (0.02 ,self ._poll_keyboard )
+
+
+    def _get_required_double (self ,name :str )->float :
+        desc =ParameterDescriptor (dynamic_typing =True )
+        self .declare_parameter (name ,None ,descriptor =desc )
+        p =self .get_parameter (name )
+        if p .type_ ==Parameter .Type .NOT_SET or p .value is None :
+            self .get_logger ().error (f"Thiếu tham số bắt buộc '{name}' trong YAML.")
+            raise RuntimeError (f"Missing required param: {name}")
+        try :
+            return float (p .value )
+        except Exception :
+            self .get_logger ().error (f"Tham số '{name}' phải là số (float). Giá trị: {p.value}")
+            raise 
+
+    def _get_double (self ,name :str ,default :float )->float :
+        self .declare_parameter (name ,float (default ))
+        p =self .get_parameter (name )
+        return float (p .value )if p .type_ !=Parameter .Type .NOT_SET else float (default )
+
+    def _get_int (self ,name :str ,default :int )->int :
+        self .declare_parameter (name ,int (default ))
+        p =self .get_parameter (name )
+        return int (p .value )if p .type_ !=Parameter .Type .NOT_SET else int (default )
+
+    def _get_optional_double (self ,name :str )->Optional [float ]:
+        desc =ParameterDescriptor (dynamic_typing =True )
+        self .declare_parameter (name ,None ,descriptor =desc )
+        p =self .get_parameter (name )
+        v =p .value 
+        if v is None :
+            return None 
+        if isinstance (v ,str ):
+            vs =v .strip ().lower ()
+            if vs in ("null","none","nan",""):
+                return None 
+            try :
+                return float (v )
+            except ValueError :
+                self .get_logger ().warn (f"Param {name}='{v}' không phải số, bỏ qua -> auto tính.")
+                return None 
+        try :
+            return float (v )
+        except Exception :
+            self .get_logger ().warn (f"Param {name}={v} không ép float được, bỏ qua -> auto tính.")
+            return None 
+
+
+    def _auto_compute_limits_if_needed (self ):
+        omega_wheel_max =2.0 *3.141592653589793 *(max (0.0 ,self .wheel_max_rpm )/60.0 )
+        v_lin =self .R *omega_wheel_max 
+        w_z =(self .R /max (1e-9 ,self .L ))*omega_wheel_max 
+        v_lin_safe =v_lin *self .limit_scale_safety 
+        w_z_safe =w_z *self .limit_scale_safety 
+        if self .max_vx is None :
+            self .max_vx =v_lin_safe 
+        if self .max_vy is None :
+            self .max_vy =v_lin_safe 
+        if self .max_wz is None :
+            self .max_wz =w_z_safe 
+
+
+    def _on_timer_pub (self ):
+        msg =Twist ()
+        msg .linear .x =self .vx 
+        msg .linear .y =self .vy 
+        msg .angular .z =self .wz 
+        self .pub .publish (msg )
+
+    def _poll_keyboard (self ):
+
+        dr ,_ ,_ =select .select ([sys .stdin ],[],[],0 )
+        if not dr :
+            return 
+        ch =sys .stdin .read (1 )
+        if not ch :
+            return 
+
+        c =ch .lower ()
+
+        if c =='w':
+            self .vx =self .scale *self .max_vx 
+        elif c =='s':
+            self .vx =-self .scale *self .max_vx 
+        elif c =='a':
+            self .vy =self .scale *self .max_vy 
+        elif c =='d':
+            self .vy =-self .scale *self .max_vy 
+        elif c =='q':
+            self .wz =self .scale *self .max_wz 
+        elif c =='e':
+            self .wz =-self .scale *self .max_wz 
+
+
+        elif c =='i':
+            self .vx =self ._clamp (self .vx +self .scale *self .inc_lin_frac *self .max_vx ,
+            -self .max_vx ,self .max_vx )
+        elif c =='k':
+            self .vx =self ._clamp (self .vx -self .scale *self .inc_lin_frac *self .max_vx ,
+            -self .max_vx ,self .max_vx )
+        elif c =='j':
+            self .vy =self ._clamp (self .vy +self .scale *self .inc_lin_frac *self .max_vy ,
+            -self .max_vy ,self .max_vy )
+        elif c =='l':
+            self .vy =self ._clamp (self .vy -self .scale *self .inc_lin_frac *self .max_vy ,
+            -self .max_vy ,self .max_vy )
+        elif c =='u':
+            self .wz =self ._clamp (self .wz +self .scale *self .inc_ang_frac *self .max_wz ,
+            -self .max_wz ,self .max_wz )
+        elif c =='o':
+            self .wz =self ._clamp (self .wz -self .scale *self .inc_ang_frac *self .max_wz ,
+            -self .max_wz ,self .max_wz )
+
+
+        elif c =='m':
+            self .scale =self ._clip (self .scale -self .step_scale ,0.0 ,1.0 )
+            self ._print_status ()
+        elif c =='.':
+            self .scale =self ._clip (self .scale +self .step_scale ,0.0 ,1.0 )
+            self ._print_status ()
+        elif c ==' ':
+            self .vx =self .vy =self .wz =0.0 
+        elif c =='p':
+            self ._print_status ()
+        elif c in ('h','?'):
+            self .get_logger ().info (HELP )
+        else :
+
+            return 
+
+        self .get_logger ().info (
+        f"cmd: vx={self.vx:.4f} m/s, vy={self.vy:.4f} m/s, wz={self.wz:.4f} rad/s  (scale={self.scale:.2f})"
+        )
+
+
+    @staticmethod 
+    def _clip (x :float ,mn :float ,mx :float )->float :
+        return mn if x <mn else mx if x >mx else x 
+
+    @staticmethod 
+    def _clamp (x :float ,mn :float ,mx :float )->float :
+        return mn if x <mn else mx if x >mx else x 
+
+    def _readable_limits (self )->str :
+        return (f"[Limits] max_vx={self.max_vx:.4f} m/s, "
+        f"max_vy={self.max_vy:.4f} m/s, "
+        f"max_wz={self.max_wz:.4f} rad/s")
+
+    def _print_status (self ):
+        self .get_logger ().info (self ._readable_limits ())
+        self .get_logger ().info (f"[Teleop] scale={self.scale:.2f} | "
+        f"inc_lin_step={self.inc_lin_frac*self.scale:.2f}×max_lin, "
+        f"inc_ang_step={self.inc_ang_frac*self.scale:.2f}×max_ang")
+
+
+    def destroy_node (self ):
+        try :
+            termios .tcsetattr (sys .stdin .fileno (),termios .TCSADRAIN ,self ._old_term_attrs )
+        except Exception :
+            pass 
+        return super ().destroy_node ()
+
+
+def main ():
+    rclpy .init ()
+    node =TeleopWASDV2 ()
+    try :
+        rclpy .spin (node )
+    except KeyboardInterrupt :
+        pass 
+    finally :
+        node .destroy_node ()
+        rclpy .shutdown ()
+
+
+if __name__ =="__main__":
+    main ()

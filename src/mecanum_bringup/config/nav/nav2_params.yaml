@@ -187,6 +187,7 @@ local_costmap:
       global_frame: odom
       robot_base_frame: base_link
       use_sim_time: False
+      transform_tolerance: 2.0
       rolling_window: true
       width: 3
       height: 3
@@ -211,6 +212,7 @@ local_costmap:
         observation_sources: scan
         scan:
           topic: /scan_360
+          qos_reliability: best_effort
           max_obstacle_height: 2.0
           clearing: True
           marking: True
@@ -232,6 +234,7 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: False
+      transform_tolerance: 2.0
       robot_radius: 0.22
       resolution: 0.05
       track_unknown_space: true

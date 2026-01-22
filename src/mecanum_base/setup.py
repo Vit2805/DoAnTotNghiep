@@ -26,13 +26,13 @@ setup(
             
             # 1. Driver điều khiển STM32
             'robot_driver = mecanum_base.robot_driver:main',
+            'robot_driver_fuzzy = mecanum_base.robot_driver_fuzzy:main',
             
             # 2. Node gộp 2 Lidar
-            'dual_lidar_merger = mecanum_base.dual_lidar_merger:main',
+            'scan_merger_360 = mecanum_base.scan_merger_360:main',
             
             # 3. Node hiển thị bánh xe (Visualizer)
             'wheel_rotation_tf = mecanum_base.wheel_rotation_tf:main',
-            'wheel_tf_node = mecanum_base.wheel_tf_node:main',
             
             # 4. Teleop (Điều khiển bàn phím - nếu bạn có dùng)
             'mecanum_teleop = mecanum_base.mecanum_teleop:main',
