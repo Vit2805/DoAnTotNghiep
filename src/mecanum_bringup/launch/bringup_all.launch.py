@@ -10,55 +10,45 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     # =========================================================
-    # 1. KHAI BÁO ĐƯỜNG DẪN GÓI & FILE CẤU HÌNH MẶC ĐỊNH
+    # 1. KHAI BÁO ĐƯỜNG DẪN GÓI & FILE CẤU HÌNH
     # =========================================================
     pkg_bringup = get_package_share_directory('mecanum_bringup')
     pkg_nav2 = get_package_share_directory('nav2_bringup')
     
-    # File cấu hình Robot (Driver, Lidar, Merger, IMU)
     default_robot_config = PathJoinSubstitution([
         FindPackageShare('mecanum_bringup'), 'config', 'base', 'robot_params.yaml'
     ])
     
-    # File cấu hình EKF
+    # Đây là đường dẫn đến file 'ekf_params.yaml' của bạn
     default_ekf_config = PathJoinSubstitution([
         FindPackageShare('mecanum_bringup'), 'config', 'base', 'ekf_params.yaml'
     ])
 
-    # File cấu hình Nav2 (Dùng bản Fuzzy tối ưu)
     default_nav2_config = PathJoinSubstitution([
         FindPackageShare('mecanum_bringup'), 'config', 'nav', 'nav2_params_fuzzy.yaml'
     ])
     
-    # File Map mặc định
     default_map = PathJoinSubstitution([
         FindPackageShare('mecanum_bringup'), 'maps', 'my_map.yaml'
     ])
 
     # =========================================================
-    # 2. KHAI BÁO CÁC LAUNCH ARGUMENTS (CÔNG TẮC)
+    # 2. KHAI BÁO CÁC CÔNG TẮC (ARGUMENTS)
     # =========================================================
     args = [
         DeclareLaunchArgument('use_sim_time', default_value='false', description='Use simulation time'),
-        
-        # Nhóm Hardware
         DeclareLaunchArgument('start_lidar', default_value='true', description='Start Lidar nodes?'),
         DeclareLaunchArgument('start_imu', default_value='true', description='Start IMU node?'),
-        
-        # Nhóm Localization
         DeclareLaunchArgument('use_ekf', default_value='true', description='Use EKF fusion?'),
         DeclareLaunchArgument('map', default_value=default_map, description='Full path to map file'),
-        
-        # Nhóm Navigation
         DeclareLaunchArgument('start_nav2', default_value='true', description='Start Nav2 stack?'),
         
-        # Config Files
         DeclareLaunchArgument('robot_params', default_value=default_robot_config, description='Robot param file'),
         DeclareLaunchArgument('ekf_params', default_value=default_ekf_config, description='EKF param file'),
         DeclareLaunchArgument('nav2_params', default_value=default_nav2_config, description='Nav2 param file'),
     ]
 
-    # Lấy giá trị từ Argument ra biến
+    # Lấy giá trị từ công tắc bỏ vào biến Python
     use_sim_time = LaunchConfiguration('use_sim_time')
     start_lidar = LaunchConfiguration('start_lidar')
     start_imu = LaunchConfiguration('start_imu')
@@ -67,11 +57,11 @@ def generate_launch_description():
     start_nav2 = LaunchConfiguration('start_nav2')
     
     robot_config = LaunchConfiguration('robot_params')
-    ekf_config = LaunchConfiguration('ekf_params')
+    ekf_config = LaunchConfiguration('ekf_params') # <--- Biến này chứa đường dẫn ekf_params.yaml
     nav2_params = LaunchConfiguration('nav2_params')
 
     # =========================================================
-    # 3. ĐỊNH NGHĨA CÁC NODE (DỰA TRÊN CODE CỦA CHÚNG TA)
+    # 3. ĐỊNH NGHĨA CÁC NODE
     # =========================================================
     
     # --- STATIC TF ---
@@ -92,27 +82,23 @@ def generate_launch_description():
             Node(package='sllidar_ros2', executable='sllidar_node', name='sllidar_rear',
                  parameters=[robot_config], remappings=[('scan', 'scan_rear')])
         ]),
-        # Node gộp Lidar xịn (ScanMerger360)
         Node(package='mecanum_base', executable='scan_merger_360', name='scan_merger_360',
              parameters=[robot_config])
     ])
 
-    # --- DRIVER FUZZY (CORE) ---
+    # --- DRIVER FUZZY ---
     driver_group = GroupAction(actions=[
-        # Chạy Driver Fuzzy (Mode: No EKF -> Tự Pub TF)
         Node(package='mecanum_base', executable='robot_driver_fuzzy', name='robot_driver_fuzzy',
              output='screen', respawn=True,
              parameters=[robot_config, {'robot.odom.publish_tf': True}],
              condition=UnlessCondition(use_ekf)),
              
-        # Chạy Driver Fuzzy (Mode: EKF -> Tắt TF)
         Node(package='mecanum_base', executable='robot_driver_fuzzy', name='robot_driver_fuzzy',
              output='screen', respawn=True,
              parameters=[robot_config, {'robot.odom.publish_tf': False}],
              remappings=[('/odom', '/wheel/odom')],
              condition=IfCondition(use_ekf)),
              
-        # Wheel Visualization (Để quay bánh xe trên RViz)
         Node(package='mecanum_base', executable='wheel_rotation_tf', name='wheel_rot',
              parameters=[robot_config])
     ])
@@ -124,15 +110,17 @@ def generate_launch_description():
         output='screen', parameters=[robot_config], remappings=[('/imu_data', '/imu/data')]
     )
 
-    # --- EKF LOCALIZATION ---
+    # --- EKF LOCALIZATION (ĐÃ SỬA LỖI) ---
     ekf_node = Node(
         condition=IfCondition(use_ekf),
         package='robot_localization', executable='ekf_node', name='ekf_filter_node',
-        output='screen', parameters=[ekf_params], remappings=[('/odometry/filtered', '/odom')]
+        output='screen', 
+        parameters=[ekf_config], # <--- ĐÃ SỬA: Dùng đúng tên biến ekf_config
+        remappings=[('/odometry/filtered', '/odom')]
     )
 
     # =========================================================
-    # 4. NAV2 STACK (GỌI TỪ THƯ VIỆN CHUẨN)
+    # 4. NAV2 STACK
     # =========================================================
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(pkg_nav2, 'launch', 'bringup_launch.py')),
@@ -142,26 +130,22 @@ def generate_launch_description():
             'map': map_yaml,
             'params_file': nav2_params,
             'autostart': 'true',
-            'use_composition': 'True', # Tối ưu RAM
+            'use_composition': 'True',
         }.items()
     )
 
     # =========================================================
-    # 5. KHỞI ĐỘNG TUẦN TỰ (DELAY GROUP)
+    # 5. KHỞI ĐỘNG TUẦN TỰ
     # =========================================================
-    
-    # Hardware lên trước
     hardware_sequence = GroupAction([
         static_tf_group,
         lidar_group,
         TimerAction(period=5.0, actions=[driver_group, imu_node])
     ])
 
-    # Thuật toán lên sau 8s
     algo_sequence = TimerAction(period=8.0, actions=[
         ekf_node,
-        nav2_launch # Chạy Nav2 luôn trong file này cho tiện
+        nav2_launch
     ])
 
-    # Trả về danh sách
     return LaunchDescription(args + [hardware_sequence, algo_sequence])
